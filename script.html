@@ -1,0 +1,715 @@
+let personnelData = [];
+let adminAuthenticated = false;
+let signaturePad = null;
+let webAppUrl = ''; // เก็บ URL ของ Web App
+let currentSettings = {}; // เก็บการตั้งค่าปัจจุบัน
+
+// Helper function to show/hide loader
+function showLoader() { document.getElementById('loader').classList.remove('hidden'); }
+function hideLoader() { document.getElementById('loader').classList.add('hidden'); }
+
+// Helper function to show modal messages
+function showModal(title, message, pdfLink = null, isSuccess = true) {
+    const modal = document.getElementById('messageModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalMessage = document.getElementById('modalMessage');
+    const modalPdfLink = document.getElementById('modalPdfLink');
+    const modalPdfLinkAnchor = modalPdfLink ? modalPdfLink.querySelector('a') : null;
+
+    if (modalTitle) modalTitle.textContent = title;
+    if (modalMessage) modalMessage.textContent = message;
+
+    if (pdfLink && modalPdfLink && modalPdfLinkAnchor) {
+        modalPdfLinkAnchor.href = pdfLink;
+        modalPdfLink.classList.remove('hidden');
+    } else {
+        if (modalPdfLink) modalPdfLink.classList.add('hidden');
+    }
+
+    if (isSuccess) {
+        if (modalTitle) modalTitle.classList.remove('text-red-700');
+        if (modalTitle) modalTitle.classList.add('text-green-700');
+    } else {
+        if (modalTitle) modalTitle.classList.remove('text-green-700');
+        if (modalTitle) modalTitle.classList.add('text-red-700');
+    }
+
+    if (modal) modal.classList.remove('hidden');
+}
+
+function hideModal() {
+    const modal = document.getElementById('messageModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+// Navigation
+function navigateTo(pageId, skipHistoryPush = false) {
+    const pages = ['formPage', 'dashboardPage', 'adminPage'];
+    pages.forEach(id => {
+        const pageElement = document.getElementById(id);
+        if (pageElement) {
+            pageElement.classList.add('hidden');
+        } else {
+            console.warn(`Page element with ID '${id}' not found.`);
+        }
+    });
+
+    const targetPage = document.getElementById(pageId + 'Page');
+    if (targetPage) {
+        targetPage.classList.remove('hidden');
+        // Call page-specific initialization functions AFTER page is visible
+        if (pageId === 'form') {
+            populateNameDropdown();
+            initializeSignaturePad();
+        } else if (pageId === 'dashboard') {
+            loadDashboardData();
+        } else if (pageId === 'admin') {
+            loadAdminSettings(); // This function handles password prompt internally
+        }
+    } else {
+        console.error(`Page element with ID '${pageId}Page' not found.`);
+        // Fallback to form page if target not found
+        const formPageElement = document.getElementById('formPage');
+        if (formPageElement) {
+            formPageElement.classList.remove('hidden');
+            pageId = 'form';
+            populateNameDropdown();
+            initializeSignaturePad();
+        }
+    }
+
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href') === '#' + pageId) {
+            link.classList.add('active');
+        }
+    });
+
+    if (!skipHistoryPush) {
+        window.location.hash = pageId;
+    }
+}
+
+// --- General Initialization & Data Loading ---
+function initialLoadSuccess(data) {
+    personnelData = data.personnel || [];
+    webAppUrl = data.webAppUrl || '';
+    updateAppSettings(data.settings); // Apply initial settings like title, logo, footer
+
+    const hash = window.location.hash.substring(1) || 'form';
+    navigateTo(hash, true); // Navigate to the correct page after data is loaded
+    hideLoader();
+    document.getElementById('app-content').classList.remove('hidden'); // Show main content
+}
+
+function initialLoadFailure(error) {
+    console.error("Error loading initial data:", error);
+    hideLoader();
+    showModal('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลเริ่มต้นได้: ' + error.message, null, false);
+}
+
+function updateAppSettings(settings) {
+    currentSettings = settings; // Store settings globally for admin page
+    const headerTitle = document.getElementById('headerTitle');
+    const headerLogo = document.getElementById('headerLogo');
+    const footerContent = document.getElementById('footerContent');
+
+    if (headerTitle) headerTitle.textContent = settings.websiteTitle || "ระบบรายงานผลการพัฒนาตนเอง";
+    if (headerLogo) headerLogo.src = settings.logoUrl || ''; // ให้ Apps Script จัดการ Default URL
+    if (footerContent) footerContent.innerHTML = settings.footerText || "";
+    // Favicon และ Title ของหน้าถูกตั้งค่าโดย doGet ใน Apps Script อยู่แล้ว
+}
+
+
+// --- Form Page Functions ---
+function populateNameDropdown() {
+    const userNameSelect = document.getElementById('userName');
+    if (!userNameSelect) {
+        console.warn("Element with ID 'userName' not found in DOM for populating dropdown.");
+        return;
+    }
+    userNameSelect.innerHTML = '<option value="">-- กรุณาเลือกชื่อ --</option>';
+    personnelData.forEach(p => {
+        const option = document.createElement('option');
+        option.value = p.name;
+        option.textContent = p.name;
+        userNameSelect.appendChild(option);
+    });
+}
+
+function initializeSignaturePad() {
+    const canvas = document.getElementById('signature-pad');
+    if (!canvas) {
+        console.warn("Signature pad canvas not found in DOM.");
+        return;
+    }
+    // Resize canvas based on display size, not drawing size
+    function resizeCanvas() {
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        canvas.width = canvas.offsetWidth * ratio;
+        canvas.height = canvas.offsetHeight * ratio;
+        canvas.getContext("2d").scale(ratio, ratio);
+        signaturePad.clear(); // clear pad on resize
+    }
+    
+    // Ensure signaturePad is only initialized once
+    if (!signaturePad) {
+        signaturePad = new SignaturePad(canvas, {
+            backgroundColor: 'rgb(249, 250, 251)', // Match Tailwind bg-gray-50
+        });
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // Initial resize
+    } else {
+        signaturePad.clear(); // Clear existing drawing when re-initializing
+        resizeCanvas(); // Ensure correct size on re-init
+    }
+
+    const clearButton = document.getElementById('clearSignature');
+    if (clearButton) {
+        clearButton.onclick = () => {
+            if (signaturePad) signaturePad.clear();
+            const signatureFileUpload = document.getElementById('signatureFileUpload');
+            if (signatureFileUpload) signatureFileUpload.value = ''; // Clear file input as well
+        };
+    } else {
+        console.warn("Clear signature button not found.");
+    }
+    
+    const signatureFileUpload = document.getElementById('signatureFileUpload');
+    if (signatureFileUpload) {
+        signatureFileUpload.onchange = () => {
+            if (signaturePad) signaturePad.clear(); // Clear drawing if file is selected
+        };
+    } else {
+        console.warn("Signature file upload input not found.");
+    }
+}
+
+// --- Form Submission Handler ---
+function handleFormSubmit(event) {
+    event.preventDefault();
+    showLoader();
+
+    const form = event.target;
+    const formData = new FormData(form);
+    const data = {};
+
+    for (let [key, value] of formData.entries()) {
+        data[key] = value;
+    }
+
+    // Process file inputs for base64
+    const filePromises = [];
+    const image1File = formData.get('image1');
+    const image2File = formData.get('image2');
+    const signatureFile = formData.get('signatureFileUpload'); // Explicitly for file upload
+
+    if (image1File && image1File.size > 0) {
+        filePromises.push(readFileAsBase64(image1File).then(base64 => { data.image1 = { name: image1File.name, type: image1File.type, base64: base64 }; }));
+    }
+    if (image2File && image2File.size > 0) {
+        filePromises.push(readFileAsBase64(image2File).then(base64 => { data.image2 = { name: image2File.name, type: image2File.type, base64: base64 }; }));
+    }
+    
+    // Prioritize file upload for signature, otherwise use drawn signature
+    if (signatureFile && signatureFile.size > 0) {
+        filePromises.push(readFileAsBase64(signatureFile).then(base64 => { data.signatureFile = { name: signatureFile.name, type: signatureFile.type, base64: base64 }; }));
+    } else if (signaturePad && !signaturePad.isEmpty()) {
+        // Assume PNG for drawn signature
+        data.signature = { name: 'signature.png', type: 'image/png', base64: signaturePad.toDataURL().split(',')[1] };
+    }
+
+    Promise.all(filePromises)
+        .then(() => {
+            // Convert date to YYYY-MM-DD for backend consistency
+            if (data.activityDate) {
+                const dateObj = new Date(data.activityDate);
+                // Adjust for timezone if necessary, but generally backend handles Date objects well
+                data.activityDate = dateObj.toISOString().split('T')[0]; 
+            }
+            google.script.run
+                .withSuccessHandler(response => {
+                    hideLoader();
+                    if (response.success) {
+                        showModal('สำเร็จ!', response.message, response.pdfLink, true);
+                        form.reset(); // Clear form
+                        if (signaturePad) signaturePad.clear(); // Clear signature pad
+                        // Optionally clear file inputs manually
+                        const image1Input = document.getElementById('image1');
+                        if (image1Input) image1Input.value = '';
+                        const image2Input = document.getElementById('image2');
+                        if (image2Input) image2Input.value = '';
+                        const signatureFileUpload = document.getElementById('signatureFileUpload');
+                        if (signatureFileUpload) signatureFileUpload.value = '';
+                    } else {
+                        showModal('ข้อผิดพลาด!', response.message, null, false);
+                    }
+                })
+                .withFailureHandler(error => {
+                    hideLoader();
+                    console.error("Form submission error:", error);
+                    showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการส่งข้อมูล: ' + error.message, null, false);
+                })
+                .processForm(data);
+        })
+        .catch(error => {
+            hideLoader();
+            console.error("File processing error:", error);
+            showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการประมวลผลไฟล์: ' + error.message, null, false);
+        });
+}
+
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]); // Get base64 part
+        reader.onerror = error => reject(error);
+        reader.readAsDataURL(file);
+    });
+}
+
+
+// --- Dashboard Page Functions ---
+function loadDashboardData() {
+    showLoader();
+    const filterName = document.getElementById('filterName') ? document.getElementById('filterName').value : '';
+    const filterPosition = document.getElementById('filterPosition') ? document.getElementById('filterPosition').value : '';
+    const filterYear = document.getElementById('filterYear') ? document.getElementById('filterYear').value : '';
+    const filterMonth = document.getElementById('filterMonth') ? document.getElementById('filterMonth').value : '';
+
+    google.script.run
+        .withSuccessHandler(response => {
+            hideLoader();
+            if (response.error) {
+                console.error("Error loading dashboard data:", response.error);
+                showModal('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลแดชบอร์ดได้: ' + response.error, null, false);
+                return;
+            }
+            displayDashboardData(response.data);
+            updateDashboardCounts(response.personnelCount, response.activityCount);
+            populateDashboardFilters(response.headers);
+        })
+        .withFailureHandler(error => {
+            hideLoader();
+            console.error("Error loading dashboard data:", error);
+            showModal('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลแดชบอร์ดได้: ' + error.message, null, false);
+        })
+        .getReportData({
+            name: filterName,
+            position: filterPosition,
+            year: filterYear,
+            month: filterMonth
+        });
+}
+
+function displayDashboardData(data) {
+    const tableBody = document.getElementById('reportTableBody');
+    if (!tableBody) {
+        console.warn("Report table body not found for dashboard display.");
+        return;
+    }
+    tableBody.innerHTML = ''; // Clear existing data
+
+    if (data.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-gray-500">ไม่พบข้อมูลรายงาน</td></tr>';
+        return;
+    }
+
+    data.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        tr.classList.add(index % 2 === 0 ? 'bg-white' : 'bg-gray-50');
+        tr.innerHTML = `
+            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">${row.no}</td>
+            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">${row.name}</td>
+            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">${row.position}</td>
+            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">${row.activityName}</td>
+            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">${row.activityDate}</td>
+            <td class="px-4 py-2 whitespace-nowrap text-center text-sm font-medium">
+                <a href="${row.pdfViewLink}" target="_blank" class="text-indigo-600 hover:text-indigo-900 mr-2">ดู PDF</a>
+                </td>
+        `;
+        tableBody.appendChild(tr);
+    });
+}
+
+function updateDashboardCounts(personnelCount, activityCount) {
+    const personnelCountEl = document.getElementById('personnelCount');
+    const activityCountEl = document.getElementById('activityCount');
+    if (personnelCountEl) personnelCountEl.textContent = personnelCount;
+    if (activityCountEl) activityCountEl.textContent = activityCount;
+}
+
+function populateDashboardFilters(headers) {
+    const filterNameSelect = document.getElementById('filterName');
+    const filterPositionSelect = document.getElementById('filterPosition');
+    const filterYearSelect = document.getElementById('filterYear');
+    const filterMonthSelect = document.getElementById('filterMonth');
+
+    if (!filterNameSelect || !filterPositionSelect || !filterYearSelect || !filterMonthSelect) {
+        console.warn("One or more filter select elements not found.");
+        return;
+    }
+
+    // Populate Name Filter
+    if (filterNameSelect.options.length <= 1) { // Only populate if default option exists
+        filterNameSelect.innerHTML = '<option value="">-- ทุกคน --</option>';
+        // Use a Set to get unique names
+        const uniqueNames = new Set(personnelData.map(p => p.name));
+        Array.from(uniqueNames).sort().forEach(name => {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            filterNameSelect.appendChild(opt);
+        });
+    }
+
+    // Populate Position Filter
+    if (filterPositionSelect.options.length <= 1) { // Only populate if default option exists
+        filterPositionSelect.innerHTML = '<option value="">-- ทุกตำแหน่ง --</option>';
+        const uniquePositions = new Set(personnelData.map(p => p.position));
+        Array.from(uniquePositions).sort().forEach(position => {
+            const opt = document.createElement('option');
+            opt.value = position;
+            opt.textContent = position;
+            filterPositionSelect.appendChild(opt);
+        });
+    }
+
+    // Populate Year Filter (Thai Year)
+    if (filterYearSelect.options.length <= 1) {
+        filterYearSelect.innerHTML = '<option value="">-- ทุกปี --</option>';
+        const currentYear = new Date().getFullYear();
+        for (let i = currentYear - 5; i <= currentYear + 1; i++) { // 5 years back, current, next year
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = i + 543; // Buddhist Era
+            filterYearSelect.appendChild(opt);
+        }
+    }
+
+    // Populate Month Filter
+    if (filterMonthSelect.options.length <= 1) {
+        filterMonthSelect.innerHTML = '<option value="">-- ทุกเดือน --</option>';
+        const months = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+        months.forEach((month, index) => {
+            const opt = document.createElement('option');
+            opt.value = index + 1;
+            opt.textContent = month;
+            filterMonthSelect.appendChild(opt);
+        });
+    }
+}
+
+
+// --- Admin Page Functions ---
+function promptForAdminPassword() {
+    const adminPasswordModal = document.getElementById('adminPasswordModal');
+    const adminContent = document.getElementById('adminContent');
+    if (adminPasswordModal) adminPasswordModal.classList.remove('hidden');
+    if (adminContent) adminContent.classList.add('hidden'); // Hide admin content until authenticated
+}
+
+function verifyPasswordAndLoadAdminContent() {
+    const passwordInput = document.getElementById('adminPasswordInput');
+    const password = passwordInput ? passwordInput.value : '';
+    if (!password) {
+        alert('กรุณากรอกรหัสผ่าน');
+        return;
+    }
+
+    showLoader();
+    google.script.run
+        .withSuccessHandler(isVerified => {
+            hideLoader();
+            if (isVerified) {
+                adminAuthenticated = true;
+                const adminPasswordModal = document.getElementById('adminPasswordModal');
+                const adminContent = document.getElementById('adminContent');
+                if (adminPasswordModal) adminPasswordModal.classList.add('hidden');
+                if (adminContent) adminContent.classList.remove('hidden');
+                loadAdminSettings(); // Load settings and personnel list after successful login
+            } else {
+                alert('รหัสผ่านไม่ถูกต้อง');
+                if (passwordInput) passwordInput.value = ''; // Clear password field
+            }
+        })
+        .withFailureHandler(error => {
+            hideLoader();
+            console.error("Admin password verification error:", error);
+            showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการตรวจสอบรหัสผ่าน: ' + error.message, null, false);
+        })
+        .verifyAdminPassword(password);
+}
+
+function loadAdminSettings() {
+    if (!adminAuthenticated) {
+        promptForAdminPassword();
+        return;
+    }
+    
+    // Populate General Settings Form
+    const websiteTitleInput = document.getElementById('websiteTitle');
+    const logoUrlInput = document.getElementById('logoUrl');
+    const faviconUrlInput = document.getElementById('faviconUrlInput');
+    const footerTextInput = document.getElementById('footerText');
+
+    if (websiteTitleInput) websiteTitleInput.value = currentSettings.websiteTitle || '';
+    if (logoUrlInput) logoUrlInput.value = currentSettings.logoUrl || '';
+    if (faviconUrlInput) faviconUrlInput.value = currentSettings.faviconUrl || '';
+    if (footerTextInput) footerTextInput.value = currentSettings.footerText || '';
+
+    // Load Personnel List for Admin
+    updatePersonnelListAdmin();
+}
+
+function handleAdminSettingsSubmit(event) {
+    event.preventDefault();
+    showLoader();
+
+    const websiteTitle = document.getElementById('websiteTitle') ? document.getElementById('websiteTitle').value : '';
+    const logoUrl = document.getElementById('logoUrl') ? document.getElementById('logoUrl').value : '';
+    const faviconUrl = document.getElementById('faviconUrlInput') ? document.getElementById('faviconUrlInput').value : '';
+    const footerText = document.getElementById('footerText') ? document.getElementById('footerText').value : '';
+
+    const settings = { websiteTitle, logoUrl, faviconUrl, footerText };
+
+    google.script.run
+        .withSuccessHandler(response => {
+            hideLoader();
+            if (response.success) {
+                showModal('สำเร็จ!', response.message, null, true);
+                // Update global settings and UI immediately
+                google.script.run.withSuccessHandler(updateAppSettings).getCurrentSettings();
+            } else {
+                showModal('ข้อผิดพลาด!', response.message, null, false);
+            }
+        })
+        .withFailureHandler(error => {
+            hideLoader();
+            console.error("Save settings error:", error);
+            showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการบันทึกการตั้งค่า: ' + error.message, null, false);
+        })
+        .saveAdminSettings(settings);
+}
+
+function handleAddPersonnel(event) {
+    event.preventDefault();
+    showLoader();
+
+    const newPersonnelName = document.getElementById('newPersonnelName') ? document.getElementById('newPersonnelName').value : '';
+    const newPersonnelPosition = document.getElementById('newPersonnelPosition') ? document.getElementById('newPersonnelPosition').value : '';
+
+    google.script.run
+        .withSuccessHandler(response => {
+            hideLoader();
+            if (response.success) {
+                showModal('สำเร็จ!', response.message, null, true);
+                personnelData = response.personnel; // Update global personnel data
+                updatePersonnelListAdmin(); // Refresh list on admin page
+                populateNameDropdown(); // Refresh dropdown on form page
+                // Clear the add personnel form
+                const addPersonnelForm = document.getElementById('addPersonnelForm');
+                if (addPersonnelForm) addPersonnelForm.reset();
+            } else {
+                showModal('ข้อผิดพลาด!', response.message, null, false);
+            }
+        })
+        .withFailureHandler(error => {
+            hideLoader();
+            console.error("Add personnel error:", error);
+            showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการเพิ่มบุคลากร: ' + error.message, null, false);
+        })
+        .addPersonnel(newPersonnelName, newPersonnelPosition);
+}
+
+function handleExcelImport(event) {
+    event.preventDefault();
+    showLoader();
+
+    const excelFile = document.getElementById('excelFile') ? document.getElementById('excelFile').files[0] : null;
+
+    if (!excelFile) {
+        hideLoader();
+        showModal('ข้อผิดพลาด!', 'กรุณาเลือกไฟล์ Excel', null, false);
+        return;
+    }
+
+    readXlsxFile(excelFile).then((rows) => {
+        // rows is an array of arrays, each sub-array is a row in the sheet
+        // This assumes the first sheet.
+        // We'll send the raw rows to Apps Script for processing.
+        // For security/simplicity, you might just be tempted to send base64 and let GS parse it.
+        // However, given the requirement for specific columns, pre-parsing here is helpful.
+        // For this specific setup (Apps Script converting .xlsx), we send the raw file as base64
+        return readFileAsBase64(excelFile).then(base64 => {
+            return {
+                name: excelFile.name,
+                type: excelFile.type,
+                base64: base64
+            };
+        });
+    }).then(fileData => {
+        google.script.run
+            .withSuccessHandler(response => {
+                hideLoader();
+                if (response.success) {
+                    showModal('สำเร็จ!', response.message, null, true);
+                    personnelData = response.personnel; // Update global personnel data
+                    updatePersonnelListAdmin(); // Refresh list on admin page
+                    populateNameDropdown(); // Refresh dropdown on form page
+                    // Clear the excel import form
+                    const excelImportForm = document.getElementById('excelImportForm');
+                    if (excelImportForm) excelImportForm.reset();
+                } else {
+                    showModal('ข้อผิดพลาด!', response.message, null, false);
+                }
+            })
+            .withFailureHandler(error => {
+                hideLoader();
+                console.error("Excel import error:", error);
+                showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการนำเข้าไฟล์ Excel: ' + error.message, null, false);
+            })
+            .importPersonnelFromExcel(fileData);
+    })
+    .catch(error => {
+        hideLoader();
+        console.error("Error reading Excel file:", error);
+        showModal('ข้อผิดพลาด!', 'เกิดข้อผิดพลาดในการอ่านไฟล์ Excel: ' + error.message, null, false);
+    });
+}
+
+
+function updatePersonnelListAdmin() {
+    const personnelListDiv = document.getElementById('personnelListAdmin');
+    if (!personnelListDiv) {
+        console.warn("Personnel list admin div not found.");
+        return;
+    }
+
+    if (personnelData.length === 0) {
+        personnelListDiv.innerHTML = '<p class="text-center py-2 text-gray-500">ยังไม่มีข้อมูลบุคลากร</p>';
+        return;
+    }
+
+    // Sort personnelData alphabetically by name
+    const sortedPersonnel = [...personnelData].sort((a, b) => a.name.localeCompare(b.name));
+
+    let html = '<ul class="list-disc pl-5 space-y-1">';
+    sortedPersonnel.forEach(p => {
+        html += `<li>${p.name} (${p.position})</li>`;
+    });
+    html += '</ul>';
+    personnelListDiv.innerHTML = html;
+}
+
+
+// --- Event Listeners (ensure DOM is ready) ---
+document.addEventListener('DOMContentLoaded', function() {
+    // Initial fetch of data and settings
+    showLoader();
+    google.script.run
+        .withSuccessHandler(initialLoadSuccess)
+        .withFailureHandler(initialLoadFailure)
+        .getInitialData();
+
+    // Attach event listeners for navigation
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            navigateTo(this.getAttribute('href').substring(1));
+        });
+    });
+
+    // Attach event listener for message modal close button
+    const modalCloseButton = document.getElementById('modalCloseButton');
+    if (modalCloseButton) {
+        modalCloseButton.addEventListener('click', hideModal);
+    }
+
+    // Attach form submission listener
+    const reportForm = document.getElementById('reportForm');
+    if (reportForm) {
+        reportForm.addEventListener('submit', handleFormSubmit);
+    } else {
+        console.warn("Report form not found, form submission handler not attached.");
+    }
+
+    // Event Delegation for userName change (to update position)
+    // This is safer as reportForm is expected to be present on DOMContentLoaded
+    if (reportForm) {
+        reportForm.addEventListener('change', function(event) {
+            if (event.target && event.target.id === 'userName') {
+                const selectedName = event.target.value;
+                const userPositionInput = document.getElementById('userPosition');
+                if (userPositionInput) {
+                    const user = personnelData.find(p => p.name === selectedName);
+                    userPositionInput.value = user ? user.position : '';
+                } else {
+                    console.warn("Element with ID 'userPosition' not found in DOM.");
+                }
+            }
+        });
+    }
+
+    // Dashboard Filters Event Listeners
+    const filterBtn = document.getElementById('filterBtn');
+    if (filterBtn) {
+        filterBtn.addEventListener('click', loadDashboardData);
+    }
+    const filterName = document.getElementById('filterName');
+    if (filterName) {
+        filterName.addEventListener('change', loadDashboardData);
+    }
+    const filterPosition = document.getElementById('filterPosition');
+    if (filterPosition) {
+        filterPosition.addEventListener('change', loadDashboardData);
+    }
+    const filterYear = document.getElementById('filterYear');
+    if (filterYear) {
+        filterYear.addEventListener('change', loadDashboardData);
+    }
+    const filterMonth = document.getElementById('filterMonth');
+    if (filterMonth) {
+        filterMonth.addEventListener('change', loadDashboardData);
+    }
+
+    // Admin Password Modal Listeners
+    const adminPasswordSubmit = document.getElementById('adminPasswordSubmit');
+    if (adminPasswordSubmit) {
+        adminPasswordSubmit.addEventListener('click', verifyPasswordAndLoadAdminContent);
+    }
+    const adminPasswordInput = document.getElementById('adminPasswordInput');
+    if (adminPasswordInput) {
+        adminPasswordInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                verifyPasswordAndLoadAdminContent();
+            }
+        });
+    }
+    const adminPasswordCancel = document.getElementById('adminPasswordCancel');
+    if (adminPasswordCancel) {
+        adminPasswordCancel.addEventListener('click', () => {
+            const adminPasswordModal = document.getElementById('adminPasswordModal');
+            if (adminPasswordModal) adminPasswordModal.classList.add('hidden');
+            navigateTo('form'); // Redirect to form page on cancel
+        });
+    }
+
+    // Admin Settings Form
+    const adminSettingsForm = document.getElementById('adminSettingsForm');
+    if (adminSettingsForm) {
+        adminSettingsForm.addEventListener('submit', handleAdminSettingsSubmit);
+    }
+
+    // Add Personnel Form
+    const addPersonnelForm = document.getElementById('addPersonnelForm');
+    if (addPersonnelForm) {
+        addPersonnelForm.addEventListener('submit', handleAddPersonnel);
+    }
+
+    // Excel Import Form
+    const excelImportForm = document.getElementById('excelImportForm');
+    if (excelImportForm) {
+        excelImportForm.addEventListener('submit', handleExcelImport);
+    }
+});
