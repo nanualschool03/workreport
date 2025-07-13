@@ -3,7 +3,7 @@ const SLIDE_TEMPLATE_ID = '1AAO4FDlxOykqa3E1E621U7zjE-7Zvl6JIUYIMDx32iM';
 const OUTPUT_FOLDER_ID = '1WBD--l_fQtRidTHTHRl_n336FVnl4YzT';
 const REPORTS_SHEET_NAME = 'รายงานผลการพัฒนาตนเอง';
 const PERSONNEL_SHEET_NAME = 'บุคลากร';
-const SETTINGS_SHEET_NAME = 'ตั้งค่าระบบ'; // หรือใช้ PropertiesService
+// const SETTINGS_SHEET_NAME = 'ตั้งค่าระบบ'; // ไม่ได้ใช้แล้ว, ใช้ PropertiesService แทน
 
 const DEFAULT_WEBSITE_TITLE = "ระบบรายงานผลการพัฒนาตนเอง โรงเรียนบ้านนานวล";
 const DEFAULT_FAVICON_URL = 'https://img5.pic.in.th/file/secure-sv1/273218374_306049724897300_8948544915894559738_n.png';
@@ -52,7 +52,7 @@ function initializeApp(e) {
     }
   } catch (e) {
     if (ui) {
-      ui.alert('Error', 'Output Folder ID (' + OUTPUT_FOLDER_ID + ') not found or access denied.', ui.ButtonSet.OK);
+      ui.alert('Error', 'Output Folder ID (' + OUTPUT_FOLDER_ID + ') not found or access denied. โปรดตรวจสอบ ID ของโฟลเดอร์ใน Code.gs', ui.ButtonSet.OK);
     } else {
       Logger.log('Error: Output Folder ID (' + OUTPUT_FOLDER_ID + ') not found or access denied. ' + e.message);
     }
@@ -99,8 +99,16 @@ function doGet(e) {
   const properties = PropertiesService.getUserProperties();
   const title = properties.getProperty('websiteTitle') || DEFAULT_WEBSITE_TITLE;
   const faviconUrl = properties.getProperty('faviconUrl') || DEFAULT_FAVICON_URL;
+  const logoUrl = properties.getProperty('logoUrl') || DEFAULT_LOGO_URL;
+  const footerText = properties.getProperty('footerText') || DEFAULT_FOOTER_TEXT;
 
-  let htmlOutput = HtmlService.createTemplateFromFile('index').evaluate();
+  let htmlTemplate = HtmlService.createTemplateFromFile('index');
+  htmlTemplate.title = title;
+  htmlTemplate.faviconUrl = faviconUrl;
+  htmlTemplate.logoUrl = logoUrl; // ส่งค่า logoUrl ไปยัง Template
+  htmlTemplate.footerText = footerText; // ส่งค่า footerText ไปยัง Template
+
+  let htmlOutput = htmlTemplate.evaluate();
   htmlOutput.setTitle(title)
             .setFaviconUrl(faviconUrl)
             .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
@@ -129,10 +137,11 @@ function getInitialData() {
 function getCurrentSettings() {
     const properties = PropertiesService.getUserProperties();
     return {
-        websiteTitle: properties.getProperty('websiteTitle') || DEFAULT_WEBSITE_TITLE,
-        logoUrl: properties.getProperty('logoUrl') || DEFAULT_LOGO_URL,
-        faviconUrl: properties.getProperty('faviconUrl') || DEFAULT_FAVICON_URL,
-        footerText: properties.getProperty('footerText') || DEFAULT_FOOTER_TEXT
+      // ใช้ DEFAULT_... ที่นี่เพื่อให้แน่ใจว่ามีค่าเริ่มต้นเสมอ
+      websiteTitle: properties.getProperty('websiteTitle') || DEFAULT_WEBSITE_TITLE,
+      logoUrl: properties.getProperty('logoUrl') || DEFAULT_LOGO_URL,
+      faviconUrl: properties.getProperty('faviconUrl') || DEFAULT_FAVICON_URL,
+      footerText: properties.getProperty('footerText') || DEFAULT_FOOTER_TEXT
     };
 }
 
@@ -281,9 +290,9 @@ function replaceShapeWithImage(presentation, shapeName, imageBlob) {
         // For now, we rely on the simpler insertImage and the template shape's properties.
         return; // Assume placeholder name is unique
       } else if (shape.getTitle && shape.getTitle() === shapeName) { // Alternative: check shape's title (set via Alt Text in Slides)
-         const newImage = slides[i].insertImage(imageBlob, shape.getLeft(), shape.getTop(), shape.getWidth(), shape.getHeight());
-         shape.remove();
-         return;
+          const newImage = slides[i].insertImage(imageBlob, shape.getLeft(), shape.getTop(), shape.getWidth(), shape.getHeight());
+          shape.remove();
+          return;
       }
     }
   }
@@ -315,7 +324,7 @@ function getReportData(filters = {}) {
     }
     if (filters.month) {
       const month = parseInt(filters.month) - 1; // JS months are 0-indexed
-       data = data.filter(row => {
+        data = data.filter(row => {
         const dateVal = row[headers.indexOf('วันที่เข้าร่วม')];
         return dateVal && (new Date(dateVal)).getMonth() === month;
       });
@@ -364,16 +373,19 @@ function getReportData(filters = {}) {
 
 // === ADMIN FUNCTIONS ===
 function verifyAdminPassword(password) {
+  // ควรใช้ PropertiesService.getScriptProperties() เพื่อเก็บรหัสผ่านจริง
+  // หรือใช้ OAuth/Service Accounts สำหรับระบบที่ปลอดภัยยิ่งขึ้น
   return password === "a123456"; // Simple password check
 }
 
 function saveAdminSettings(settings) {
   try {
     const properties = PropertiesService.getUserProperties();
-    if (settings.websiteTitle) properties.setProperty('websiteTitle', settings.websiteTitle);
-    if (settings.logoUrl) properties.setProperty('logoUrl', settings.logoUrl);
-    if (settings.faviconUrl) properties.setProperty('faviconUrl', settings.faviconUrl);
-    if (settings.footerText) properties.setProperty('footerText', settings.footerText);
+    // ตรวจสอบค่าว่างก่อนตั้งค่า เพื่อไม่ให้เก็บค่า null/undefined ลง Properties
+    if (settings.websiteTitle !== undefined) properties.setProperty('websiteTitle', settings.websiteTitle);
+    if (settings.logoUrl !== undefined) properties.setProperty('logoUrl', settings.logoUrl);
+    if (settings.faviconUrl !== undefined) properties.setProperty('faviconUrl', settings.faviconUrl);
+    if (settings.footerText !== undefined) properties.setProperty('footerText', settings.footerText);
     return { success: true, message: "บันทึกการตั้งค่าเรียบร้อยแล้ว" };
   } catch (e) {
     console.error("Error saving admin settings: " + e.toString());
@@ -418,20 +430,23 @@ function importPersonnelFromExcel(fileData) {
     const decodedData = Utilities.base64Decode(fileData.base64);
     const blob = Utilities.newBlob(decodedData, fileData.type, fileData.name);
     
+    // สร้างไฟล์ชั่วคราวใน Drive
     const tempFile = DriveApp.getFolderById(tempFolderId).createFile(blob);
-    const spreadsheetId = tempFile.getId(); // The ID of the uploaded Excel file
+    const originalSpreadsheetId = tempFile.getId(); 
 
-    // Convert to Google Sheet format using Drive API (Advanced Service)
-    // This part requires Drive API to be enabled in Services
-    const convertedFile = Drive.Files.copy({ mimeType: MimeType.GOOGLE_SHEETS, title: `[Temp Import] ${fileData.name}` }, spreadsheetId);
+    // แปลงไฟล์ Excel เป็น Google Sheet โดยใช้ Drive Advanced Service
+    // ต้องไปเปิด Drive API ใน Services ของ Apps Script Project ก่อน
+    const convertedFile = Drive.Files.copy({ mimeType: MimeType.GOOGLE_SHEETS, title: `[Temp Import] ${fileData.name}` }, originalSpreadsheetId);
     const tempSheetId = convertedFile.id;
     
+    // เปิด Google Sheet ชั่วคราวและอ่านข้อมูล
     const ss = SpreadsheetApp.openById(tempSheetId);
     const importSheet = ss.getSheets()[0]; // Assuming data is in the first sheet
     const data = importSheet.getDataRange().getValues();
     
-    DriveApp.getFileById(spreadsheetId).setTrashed(true); // Delete original Excel upload
-    DriveApp.getFileById(tempSheetId).setTrashed(true); // Delete temporary Google Sheet
+    // ลบไฟล์ชั่วคราวทิ้ง
+    DriveApp.getFileById(originalSpreadsheetId).setTrashed(true); 
+    DriveApp.getFileById(tempSheetId).setTrashed(true); 
 
     if (!data || data.length <= 1) { // No data or only header
       return { success: false, message: "ไฟล์ Excel ไม่มีข้อมูล หรือมีเพียงหัวตาราง" };
@@ -472,8 +487,8 @@ function importPersonnelFromExcel(fileData) {
   } catch (e) {
     console.error("Error importing from Excel: " + e.toString() + "\nStack: " + e.stack);
     // Clean up temporary files if error occurs
-    if (typeof spreadsheetId !== 'undefined' && spreadsheetId) {
-        try { DriveApp.getFileById(spreadsheetId).setTrashed(true); } catch (err) {}
+    if (typeof originalSpreadsheetId !== 'undefined' && originalSpreadsheetId) {
+        try { DriveApp.getFileById(originalSpreadsheetId).setTrashed(true); } catch (err) {}
     }
     if (typeof tempSheetId !== 'undefined' && tempSheetId) {
         try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (err) {}
